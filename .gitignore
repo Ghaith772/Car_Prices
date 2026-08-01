@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+*.pyc
+train.py
+test.py
+car_prices.csv
