@@ -41,6 +41,16 @@ try:
 except Exception as e:
     raise RuntimeError(f"فشل تحميل ملف encoders من {ENCODERS_PATH}: {e}") from e
 
+ALIASES_PATH = BASE_DIR / "model_artifacts" / "aliases.json"
+try:
+    with open(ALIASES_PATH, "r", encoding="utf-8") as f:
+        aliases = json.load(f)
+except Exception as e:
+    raise RuntimeError(f"فشل تحميل ملف aliases من {ALIASES_PATH}: {e}") from e
+
+make_aliases  = aliases.get("make", {})
+model_aliases = aliases.get("model", {})
+
 make_map  = artifacts["make_map"]
 model_map = artifacts["model_map"]
 columns   = artifacts["columns"]
@@ -48,6 +58,16 @@ columns   = artifacts["columns"]
 KM_TO_MILE = 0.621371
 
 VALID_BODIES = {col.split("body_", 1)[1] for col in columns if col.startswith("body_")}
+
+
+# ---------------------------------------------------------------------------
+# Shared normalization rule (MUST stay identical to train.py's normalize_text)
+# strip -> lower -> remove all non-alphanumeric chars (incl. spaces) -> capitalize
+# e.g. "Land Rover" -> "Landrover", " kia " -> "Kia"
+# ---------------------------------------------------------------------------
+def normalize_text(value: str) -> str:
+    v = re.sub(r"[^a-z0-9]", "", value.strip().lower())
+    return v.capitalize()
 
 
 class CarInput(BaseModel):
@@ -64,11 +84,10 @@ class CarInput(BaseModel):
 
     @field_validator("make", "model_name", "body", "transmission", "color", mode="before")
     @classmethod
-    def normalize_text(cls, v):
+    def apply_normalize_text(cls, v):
         if not isinstance(v, str):
             raise ValueError("يجب أن تكون القيمة نصية")
-        v = re.sub(r"\s+", " ", v.strip())
-        return v.lower().title()
+        return normalize_text(v)
 
     @field_validator("year", mode="before")
     @classmethod
@@ -95,6 +114,10 @@ class CarInput(BaseModel):
     @field_validator("make")
     @classmethod
     def validate_make(cls, v):
+        # Alias layer: try the raw normalized value first, then fall back
+        # to its canonical alias (both are already in normalize_text form).
+        if v not in make_map:
+            v = make_aliases.get(v, v)
         if v not in make_map:
             raise ValueError(f"اسم الشركة المصنعة '{v}' غير معروف أو غير واقعي")
         return v
@@ -102,6 +125,9 @@ class CarInput(BaseModel):
     @field_validator("model_name")
     @classmethod
     def validate_model(cls, v):
+        # Alias layer: e.g. "Cerato" -> "Forte" before the model_map lookup.
+        if v not in model_map:
+            v = model_aliases.get(v, v)
         if v not in model_map:
             raise ValueError(f"موديل السيارة '{v}' غير معروف أو غير واقعي")
         return v
@@ -150,7 +176,7 @@ async def validation_exception_handler(request, exc):
     ]
     return JSONResponse(status_code=422, content={"errors": errors})
 
-
+change=0
 def predict_price(make, model_name, year, body, transmission, odometer, color, condition):
     input_df = pd.DataFrame([{col: 0 for col in columns}])
     input_df["make"]      = make_map[make]
@@ -164,7 +190,11 @@ def predict_price(make, model_name, year, body, transmission, odometer, color, c
         if col_name in input_df.columns:
             input_df[col_name] = 1
 
-    return model.predict(input_df)[0]
+    if(year>2015):
+        change=(year-2015)*0.06
+        return model.predict(input_df)[0]*(1+change)
+    else:
+        return model.predict(input_df)[0]
 
 
 @app.get("/health")
