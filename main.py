@@ -58,13 +58,9 @@ columns   = artifacts["columns"]
 KM_TO_MILE = 0.621371
 
 VALID_BODIES = {col.split("body_", 1)[1] for col in columns if col.startswith("body_")}
+VALID_COLORS = {col.split("color_", 1)[1] for col in columns if col.startswith("color_")}
 
 
-# ---------------------------------------------------------------------------
-# Shared normalization rule (MUST stay identical to train.py's normalize_text)
-# strip -> lower -> remove all non-alphanumeric chars (incl. spaces) -> capitalize
-# e.g. "Land Rover" -> "Landrover", " kia " -> "Kia"
-# ---------------------------------------------------------------------------
 def normalize_text(value: str) -> str:
     v = re.sub(r"[^a-z0-9]", "", value.strip().lower())
     return v.capitalize()
@@ -114,8 +110,7 @@ class CarInput(BaseModel):
     @field_validator("make")
     @classmethod
     def validate_make(cls, v):
-        # Alias layer: try the raw normalized value first, then fall back
-        # to its canonical alias (both are already in normalize_text form).
+
         if v not in make_map:
             v = make_aliases.get(v, v)
         if v not in make_map:
@@ -137,6 +132,13 @@ class CarInput(BaseModel):
     def validate_body(cls, v):
         if v not in VALID_BODIES:
             raise ValueError(f"نوع الهيكل (body) '{v}' غير معروف أو غير واقعي")
+        return v
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, v):
+        if v not in VALID_COLORS:
+            raise ValueError(f"اللون '{v}' غير معروف أو غير واقعي")
         return v
 
     @field_validator("year")
@@ -176,7 +178,7 @@ async def validation_exception_handler(request, exc):
     ]
     return JSONResponse(status_code=422, content={"errors": errors})
 
-change=0
+
 def predict_price(make, model_name, year, body, transmission, odometer, color, condition):
     input_df = pd.DataFrame([{col: 0 for col in columns}])
     input_df["make"]      = make_map[make]
